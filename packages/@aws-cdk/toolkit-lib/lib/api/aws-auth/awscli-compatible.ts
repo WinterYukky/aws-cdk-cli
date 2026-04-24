@@ -117,7 +117,23 @@ export class AwsCliCompatible {
 
     // Skip the IMDS credential provider if we're not on EC2, to avoid a
     // 1-2 second timeout on non-EC2 machines.
-    if (process.env.AWS_EC2_METADATA_DISABLED === undefined && !isEc2Instance()) {
+    //
+    // However, we must keep IMDS enabled on other AWS-managed runtimes that
+    // deliver credentials via IMDS but do not expose the `/sys` markers that
+    // `isEc2Instance()` probes (e.g. Amazon Bedrock AgentCore Runtime, which
+    // isolates each session in its own microVM with a restricted sysfs view).
+    // AWS-managed runtimes consistently publish themselves through the
+    // `AWS_EXECUTION_ENV` environment variable using values with the `AWS_`
+    // prefix (e.g. `AWS_Lambda_nodejs20.x`, `AWS_BedrockAgentCore_Runtime`,
+    // `AWS_CodeBuild`). If that marker is present, we assume we are inside an
+    // AWS-managed environment and leave IMDS enabled so credential resolution
+    // can succeed. On a developer workstation that marker is absent, so the
+    // original 1-2s optimization still applies.
+    if (
+      process.env.AWS_EC2_METADATA_DISABLED === undefined
+      && !isEc2Instance()
+      && !process.env.AWS_EXECUTION_ENV?.startsWith('AWS_')
+    ) {
       process.env.AWS_EC2_METADATA_DISABLED = 'true';
     }
 

@@ -4,6 +4,12 @@ import * as fs from 'fs-extra';
 import { AwsCliCompatible } from '../../../lib/api/aws-auth/private';
 import { TestIoHost } from '../../_helpers/test-io-host';
 
+jest.mock('../../../lib/api/aws-auth/ec2-detection', () => ({
+  isEc2Instance: jest.fn(),
+}));
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { isEc2Instance } = require('../../../lib/api/aws-auth/ec2-detection');
+
 const ioHost = new TestIoHost();
 const ioHelper = ioHost.asHelper('sdk');
 
@@ -273,5 +279,69 @@ describe('Session token', () => {
     await new AwsCliCompatible(ioHelper, {}).credentialChainBuilder();
 
     expect(process.env.AWS_SESSION_TOKEN).toEqual('aaa');
+  });
+});
+
+describe('IMDS auto-disable on non-EC2 environments', () => {
+  const originalExecutionEnv = process.env.AWS_EXECUTION_ENV;
+  const originalMetadataDisabled = process.env.AWS_EC2_METADATA_DISABLED;
+
+  beforeEach(() => {
+    // Pretend we're not on EC2 so the auto-disable code path is reachable.
+    (isEc2Instance as jest.Mock).mockReturnValue(false);
+
+    delete process.env.AWS_EC2_METADATA_DISABLED;
+    delete process.env.AWS_EXECUTION_ENV;
+  });
+
+  afterEach(() => {
+    if (originalExecutionEnv === undefined) {
+      delete process.env.AWS_EXECUTION_ENV;
+    } else {
+      process.env.AWS_EXECUTION_ENV = originalExecutionEnv;
+    }
+    if (originalMetadataDisabled === undefined) {
+      delete process.env.AWS_EC2_METADATA_DISABLED;
+    } else {
+      process.env.AWS_EC2_METADATA_DISABLED = originalMetadataDisabled;
+    }
+  });
+
+  test('auto-disables IMDS on a developer workstation (AWS_EXECUTION_ENV unset)', async () => {
+    await new AwsCliCompatible(ioHelper, {}).credentialChainBuilder();
+
+    expect(process.env.AWS_EC2_METADATA_DISABLED).toEqual('true');
+  });
+
+  test('auto-disables IMDS when AWS_EXECUTION_ENV does not have the AWS_ prefix', async () => {
+    process.env.AWS_EXECUTION_ENV = 'MyCustomEnv';
+
+    await new AwsCliCompatible(ioHelper, {}).credentialChainBuilder();
+
+    expect(process.env.AWS_EC2_METADATA_DISABLED).toEqual('true');
+  });
+
+  test('keeps IMDS enabled on Amazon Bedrock AgentCore Runtime', async () => {
+    process.env.AWS_EXECUTION_ENV = 'AWS_BedrockAgentCore_Runtime';
+
+    await new AwsCliCompatible(ioHelper, {}).credentialChainBuilder();
+
+    expect(process.env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+  });
+
+  test('keeps IMDS enabled on AWS Lambda (AWS_Lambda_* marker)', async () => {
+    process.env.AWS_EXECUTION_ENV = 'AWS_Lambda_nodejs20.x';
+
+    await new AwsCliCompatible(ioHelper, {}).credentialChainBuilder();
+
+    expect(process.env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+  });
+
+  test('does not override an explicit AWS_EC2_METADATA_DISABLED value', async () => {
+    process.env.AWS_EC2_METADATA_DISABLED = 'false';
+
+    await new AwsCliCompatible(ioHelper, {}).credentialChainBuilder();
+
+    expect(process.env.AWS_EC2_METADATA_DISABLED).toEqual('false');
   });
 });
